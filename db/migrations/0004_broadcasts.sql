@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS broadcasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc TEXT NOT NULL,
+    segment TEXT NOT NULL,
+    text TEXT NOT NULL,
+    photo TEXT,
+    total INTEGER NOT NULL DEFAULT 0,
+    sent INTEGER NOT NULL DEFAULT 0,
+    blocked INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'running'
+);
