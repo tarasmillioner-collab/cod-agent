@@ -22,6 +22,13 @@ log = logging.getLogger("webapi")
 import re as _re
 _re_field = _re.compile(r"^(?:[A-Z]\.[a-z0-9_]+|obj\.[a-z0-9_]+)$")
 
+_TAGS_RX = _re.compile(r"<[^>]+>")
+
+
+def _plain_txt(t: str) -> str:
+    return _TAGS_RX.sub("", t or "").strip()
+
+
 SEND_PAUSE = 0.06          # ~16 msg/s — нижче ліміту Telegram (30/s)
 
 
@@ -73,9 +80,21 @@ def _err(msg: str, status: int = 400) -> web.Response:
 def make_app(svc) -> web.Application:
     app = web.Application(client_max_size=12 * 1024 * 1024)
 
+    def actor_of(body: dict) -> str | None:
+        """Ім'я того, хто діє (за його персональним кодом). None — код невірний."""
+        got = str(body.get("key") or "")
+        for key, name in (svc.cfg.admin_keys or {}).items():
+            if key and hmac.compare_digest(got, key):
+                return name
+        return None
+
     def authed(body: dict) -> bool:
-        key = svc.cfg.admin_api_key
-        return bool(key) and hmac.compare_digest(str(body.get("key") or ""), key)
+        return actor_of(body) is not None
+
+    def logit(actor: str, action: str, target: str = "", detail: str = "") -> None:
+        svc.store.c.execute(
+            "INSERT INTO dash_log(ts_utc, actor, action, target, detail) VALUES(?,?,?,?,?)",
+            (now_utc(), actor, action, target, detail[:200]))
 
     # --- живі метрики (публічні, як і сам дашборд) ---
     async def stats(req: web.Request) -> web.Response:
@@ -127,32 +146,38 @@ def make_app(svc) -> web.Application:
         body = await req.json()
         if not authed(body):
             return _err("bad key", 403)
+        who = actor_of(body) or "Менеджер"
         uid, text = int(body.get("chat_id") or 0), (body.get("text") or "").strip()
         if not uid or not text or len(text) > 3500:
             return _err("chat_id/text")
         ch = svc.store.get_chat(uid)
         if not ch:
             return _err("чат не знайдено", 404)
+        busy = (ch.get("assignee") or "")
+        if busy and busy != who and not body.get("take"):
+            return _err(f"чат веде {busy} — натисніть «перехопити», щоб відповідати", 409)
         try:
             await svc.bot.send_message(ch["chat_id"], html.escape(text))
         except TelegramForbiddenError:
             svc.store.update_chat(uid, blocked_utc=now_utc())
             return _err("клієнт заблокував бота", 410)
         if ch.get("mode") != "human":
-            svc.store.update_chat(uid, mode="human")
             svc.store.open_handoff(uid, None, None, "dashboard_reply")
-        name = svc.cfg.manager_name or "Менеджер"
-        svc.store.add_message(uid, "assistant", f"[{name} з дашборда] {text}")
-        return _ok({"mode": "human"})
+        svc.store.update_chat(uid, mode="human", assignee=who)
+        svc.store.add_message(uid, "assistant", f"[{who}] {text}")
+        logit(who, "reply", str(uid), text)
+        return _ok({"mode": "human", "assignee": who})
 
     # --- повернути чат боту ---
     async def close(req: web.Request) -> web.Response:
         body = await req.json()
         if not authed(body):
             return _err("bad key", 403)
+        who = actor_of(body) or "Менеджер"
         uid = int(body.get("chat_id") or 0)
-        svc.store.update_chat(uid, mode="bot")
+        svc.store.update_chat(uid, mode="bot", assignee=None)
         svc.store.close_handoff(uid)
+        logit(who, "back_to_bot", str(uid))
         return _ok({"mode": "bot"})
 
     # --- розсилка ---
@@ -168,15 +193,23 @@ def make_app(svc) -> web.Application:
             return _err("невідомий сегмент")
         if not text or len(text) > 3500:
             return _err("текст 1..3500 символів")
+        who = actor_of(body) or "Менеджер"
         ids = segment_ids(svc.store, seg)
         if body.get("dry"):
             return _ok({"total": len(ids), "segment": SEGMENTS[seg]})
         if not ids:
             return _err("сегмент порожній")
+        recent = svc.store.c.execute(
+            "SELECT actor, ts_utc FROM broadcasts WHERE segment=? AND ts_utc>? ORDER BY id DESC LIMIT 1",
+            (seg, _cut(0) if False else (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat())).fetchone()
+        if recent and not body.get("force"):
+            return _err(f"{recent[0] or 'хтось'} щойно надіслав на цей сегмент ({recent[1][11:16]}). "
+                        f"Якщо це навмисно — натисніть ще раз протягом хвилини", 409)
         cur = svc.store.c.execute(
-            "INSERT INTO broadcasts(ts_utc, segment, text, photo, total, state) VALUES(?,?,?,?,?, 'running')",
-            (now_utc(), seg, text[:500], photo or None, len(ids)))
+            "INSERT INTO broadcasts(ts_utc, segment, text, photo, total, state, actor) VALUES(?,?,?,?,?, 'running', ?)",
+            (now_utc(), seg, text[:500], photo or None, len(ids), who))
         bid = cur.lastrowid
+        logit(who, "broadcast", seg, text)
         asyncio.create_task(_run_broadcast(svc, bid, ids, text, photo))
         return _ok({"broadcast_id": bid, "total": len(ids)})
 
@@ -185,7 +218,7 @@ def make_app(svc) -> web.Application:
         if not authed(body):
             return _err("bad key", 403)
         rows = svc.store.c.execute(
-            "SELECT id, ts_utc, segment, text, total, sent, blocked, state FROM broadcasts ORDER BY id DESC LIMIT 10").fetchall()
+            "SELECT id, ts_utc, segment, text, total, sent, blocked, state, actor FROM broadcasts ORDER BY id DESC LIMIT 10").fetchall()
         return _ok({"items": [dict(r) for r in rows]})
 
     # --- сценарій бота: перегляд і правки текстів ---
@@ -204,10 +237,14 @@ def make_app(svc) -> web.Application:
         body = await req.json()
         if not authed(body):
             return _err("bad key", 403)
-        k, v = str(body.get("key") or ""), str(body.get("value") or "")
+        k, v = str(body.get("name") or ""), str(body.get("value") or "")
         if k not in SETTINGS_OK or v not in SETTINGS_OK[k]:
             return _err("не можна змінювати це поле")
         svc.store.set_setting(k, v)
+        _who = actor_of(body) or "Менеджер"
+        logit(_who, "setting", k, v)
+        from web import state_sync
+        state_sync.fire(svc, _who, f"змінив налаштування {k}={v}")
         return _ok({"key": k, "value": v})
 
     async def flow_save(req: web.Request) -> web.Response:
@@ -235,8 +272,52 @@ def make_app(svc) -> web.Application:
         if k.startswith("obj."):
             svc.objections = OBJ.load(svc.offer)
         svc.store.funnel("copy_edited", 0, None, {"field": k, "reset": reset})
+        _who = actor_of(body) or "Менеджер"
+        logit(_who, "reset_text" if reset else "edit_text", k, text)
+        from web import state_sync
+        state_sync.fire(svc, _who, ("повернув стандартний текст " if reset else "змінив текст ") + k)
         return _ok({"field": k, "reset": reset})
 
+    # --- живий стан діалогів: хто веде, хто чекає, нові повідомлення ---
+    async def dialogs(req: web.Request) -> web.Response:
+        rows = svc.store.c.execute(
+            """SELECT c.tg_user_id AS id, c.mode, c.assignee,
+                      (SELECT content FROM messages m WHERE m.chat_id=c.tg_user_id ORDER BY m.id DESC LIMIT 1) AS last_t,
+                      (SELECT role FROM messages m WHERE m.chat_id=c.tg_user_id ORDER BY m.id DESC LIMIT 1) AS last_r,
+                      (SELECT ts_utc FROM messages m WHERE m.chat_id=c.tg_user_id ORDER BY m.id DESC LIMIT 1) AS last_ts
+               FROM chats c WHERE EXISTS(SELECT 1 FROM messages m WHERE m.chat_id=c.tg_user_id)
+               ORDER BY last_ts DESC LIMIT 40""").fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["last_t"] = _plain_txt(d.get("last_t") or "")[:120]
+            out.append(d)
+        res = {"chats": out}
+        cid = req.query.get("chat_id")
+        since = req.query.get("since") or ""
+        if cid:
+            msgs = svc.store.c.execute(
+                "SELECT role, content, ts_utc FROM messages WHERE chat_id=? AND ts_utc>? ORDER BY id LIMIT 40",
+                (int(cid), since)).fetchall()
+            res["msgs"] = [{"r": "u" if m["role"] == "user" else "a",
+                            "t": _plain_txt(m["content"])[:900], "ts": m["ts_utc"][:19]} for m in msgs]
+        return _ok(res)
+
+    async def dash_log(req: web.Request) -> web.Response:
+        rows = svc.store.c.execute(
+            "SELECT ts_utc, actor, action, target, detail FROM dash_log ORDER BY id DESC LIMIT 15").fetchall()
+        return _ok({"items": [dict(r) for r in rows]})
+
+    async def whoami(req: web.Request) -> web.Response:
+        body = await req.json()
+        who = actor_of(body)
+        if not who:
+            return _err("Такого коду немає. Перевірте, чи скопіювали повністю", 403)
+        return _ok({"name": who})
+
+    app.router.add_post("/api/whoami", whoami)
+    app.router.add_get("/api/dialogs", dialogs)
+    app.router.add_get("/api/log", dash_log)
     app.router.add_post("/api/setting", setting)
     app.router.add_get("/api/flow", flow)
     app.router.add_post("/api/flow_save", flow_save)

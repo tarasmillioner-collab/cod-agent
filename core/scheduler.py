@@ -319,6 +319,9 @@ async def job_dashboard_html(svc: Services) -> None:
     render_broadcast(svc.cfg.base_dir / "var" / "broadcast.html", slug)
     render_flow(svc.cfg.base_dir / "var" / "flow.html", slug)
     render_pwa(svc.cfg.base_dir / "var", slug)
+    if now_kyiv().hour == 4:                       # раз на добу — зріз стану в git
+        from web import state_sync
+        await state_sync.snapshot(svc, "Система", "щоденний зріз")
 
 
 async def _refresh_netcost(svc: Services) -> None:

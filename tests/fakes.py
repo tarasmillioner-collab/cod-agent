@@ -132,7 +132,7 @@ def make_cfg(**over) -> Config:
                 np_api_key="", db_path=":memory:", offer_path=str(ROOT / "offer.yaml"),
                 prompt_path=str(ROOT / "prompts/system.md"), blacklist_path=str(ROOT / "ua_blacklist.txt"),
                 llm_daily_usd_cap=15.0, voice_enabled=False, elevenlabs_api_key="", kie_api_key="", manager_name="Наталя",
-                admin_api_key="testkey", api_port=0, base_dir=ROOT)
+                admin_api_key="testkey", admin_keys={"testkey": "Тест"}, api_port=0, base_dir=ROOT)
     base.update(over)
     return Config(**base)
 

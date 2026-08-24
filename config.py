@@ -46,6 +46,7 @@ class Config:
     kie_api_key: str
     manager_name: str
     admin_api_key: str
+    admin_keys: dict
     api_port: int
     base_dir: Path = field(default_factory=Path)
 
@@ -64,6 +65,22 @@ def _parse_env_file(path: Path) -> dict[str, str]:
         v = re.split(r"\s+#", v, 1)[0]
         data[k.strip()] = v.strip().strip('"').strip("'")
     return data
+
+
+def _parse_keys(raw: str, fallback: str) -> dict:
+    """ADMIN_KEYS=тарас:код1,саша:код2 → {'код1': 'Тарас', 'код2': 'Саша'}; ADMIN_API_KEY лишається як «Власник»."""
+    out: dict[str, str] = {}
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part or ":" not in part:
+            continue
+        name, _, key = part.partition(":")
+        name, key = name.strip(), key.strip()
+        if name and key:
+            out[key] = name[:1].upper() + name[1:]
+    if fallback:
+        out.setdefault(fallback, "Власник")
+    return out
 
 
 def load_config(env_path: str | Path = "config.env") -> Config:
@@ -120,6 +137,7 @@ def load_config(env_path: str | Path = "config.env") -> Config:
         kie_api_key=get("KIE_API_KEY", ""),
         manager_name=get("MANAGER_NAME", ""),
         admin_api_key=get("ADMIN_API_KEY", ""),
+        admin_keys=_parse_keys(get("ADMIN_KEYS", ""), get("ADMIN_API_KEY", "")),
         api_port=int(get("API_PORT", "7810") or 0),
         base_dir=base,
     )

@@ -338,8 +338,9 @@ _MSG_CSS = r"""
 .ch .nm{font-weight:600;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ch .tm{margin-left:auto;font-size:11.5px;color:var(--sub);flex:none}
 .ch .pv{font-size:13px;color:var(--sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
-.ch .bdg{background:var(--green);color:#fff;font-size:11px;font-weight:700;border-radius:11px;padding:1px 7px;flex:none}
-.ch .bdg.hum{background:var(--red)}
+.ch .bdg{background:var(--green);color:#fff;font-size:10.5px;font-weight:700;border-radius:11px;padding:1px 7px;flex:none;
+ max-width:74px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ch .bdg.hum{background:var(--red)} .ch .bdg.mine{background:var(--acc)}
 .conv{display:flex;flex-direction:column;min-height:0;background:var(--bg)}
 .chead{display:flex;align-items:center;gap:11px;padding:9px 18px;background:var(--bg2);border-bottom:1px solid var(--line);min-height:58px}
 .chead .ava{width:38px;height:38px;font-size:15px}
@@ -427,7 +428,24 @@ _THEME_JS = r"""
 
 _KEY_JS = r"""
 <script>
-function key(){let k=localStorage.getItem("cod_key");if(!k){k=prompt("Код доступу:")||"";if(k)localStorage.setItem("cod_key",k)}return k}
+function key(){let k=localStorage.getItem("cod_key");if(!k){k=prompt("Введіть свій код доступу:")||"";if(k)localStorage.setItem("cod_key",k)}return k}
+function paintLogin(){const b=document.getElementById("loginbtn");if(!b)return;
+ const me=localStorage.getItem("cod_me");
+ b.innerHTML=me?("👤 "+me):"Увійти";b.classList.toggle("on",!!me);
+ b.title=me?"Натисніть, щоб вийти або змінити код":"Введіть код доступу";}
+async function login(){const me=localStorage.getItem("cod_me");
+ if(me){if(confirm("Ви увійшли як "+me+". Вийти?")){localStorage.removeItem("cod_key");localStorage.removeItem("cod_me");paintLogin()}return}
+ const k=prompt("Введіть свій код доступу:");if(!k)return;
+ const r=await fetch("/api/whoami",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:k.trim()})});
+ const j=await r.json();
+ if(j.ok){localStorage.setItem("cod_key",k.trim());localStorage.setItem("cod_me",j.name);paintLogin();
+  if(window.toast)toast("👤 Вітаю, "+j.name+"! Тепер можна відповідати клієнтам і робити розсилки")}
+ else alert(j.error||"Невірний код")}
+async function checkKey(){const k=localStorage.getItem("cod_key");if(!k){paintLogin();return}
+ try{const r=await fetch("/api/whoami",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:k})});
+  const j=await r.json();if(j.ok)localStorage.setItem("cod_me",j.name);else{localStorage.removeItem("cod_key");localStorage.removeItem("cod_me")}}catch(e){}
+ paintLogin()}
+document.addEventListener("DOMContentLoaded",checkKey);
 async function api(path,body){body.key=key();
  const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
  let j={};try{j=await r.json()}catch(e){}
@@ -458,6 +476,7 @@ def _nav(active: str) -> str:
     return ('<span class="navtop">' + b("/dashboard.html", "", "Пульт", "dash")
             + b("/dialogs.html", "", "Діалоги", "dlg") + b("/flow.html", "", "Сценарій", "flow")
             + b("/broadcast.html", "", "Розсилка", "bc") + '</span>'
+            + '<button class="tbtn lbl" id="loginbtn" onclick="login()">Увійти</button>'
             + '<button class="tbtn" onclick="toggleTheme()" title="Тема"><span class="themeico">☾</span></button>')
 
 
@@ -519,6 +538,8 @@ _DASH = r"""
   <div class="ttl" style="padding:16px 20px 0;margin-bottom:10px">Останні замовлення <span class="r">клік — відкрити діалог</span></div>
   <div class="rows">%%ORDERS%%</div></div>
  <div class="statusbar" id="statusbar"></div>
+ <div class="card d4" id="logcard" style="margin-top:14px;display:none"><div class="ttl">Хто що робив
+  <span class="r">дії з пульта</span></div><div class="rows" id="log"></div></div>
 </main>
 <div id="toast"></div>
 <script>
@@ -651,8 +672,18 @@ function renderStatus(j){const S=j.settings||{},push=S.push_orders!=="0";
  const b=document.getElementById("statusbar");if(!b)return;
  b.innerHTML=`<div class="chip ${S.bot_enabled==="0"?"bad":"ok"}">${S.bot_enabled==="0"?"● бот вимкнено":"● бот працює"}</div>
   <div class="chip tog" onclick="togglePush()"><span class="sw ${push?"on":""}"><i></i></span>Пуш у Telegram про кожне замовлення</div>`}
+const ACT={reply:["💬","відповів клієнту"],back_to_bot:["↩","повернув чат боту"],
+ broadcast:["📣","запустив розсилку"],edit_text:["✏️","змінив текст"],reset_text:["↩","повернув стандартний текст"],
+ setting:["⚙️","змінив налаштування"]};
+async function loadLog(){try{const j=await(await fetch("/api/log")).json();
+ if(!j.ok||!j.items.length)return;
+ document.getElementById("logcard").style.display="";
+ document.getElementById("log").innerHTML=j.items.map(x=>{const[ic,tx]=ACT[x.action]||["·",x.action];
+  return `<div class="row"><div class="mid"><div class="n1"><b>${ic} ${x.actor}</b> <span class="n2">${tx}</span></div>
+   <div class="n2">${(x.detail||x.target||"").slice(0,70)}</div></div>
+   <div class="rt"><div class="tm">${x.ts_utc.slice(11,16)}</div></div></div>`}).join("")}catch(e){}}
 async function togglePush(){const cur=document.querySelector(".statusbar .sw").classList.contains("on");
- const j=await api("/api/setting",{key:"push_orders",value:cur?"0":"1"});
+ const j=await api("/api/setting",{name:"push_orders",value:cur?"0":"1"});
  if(j.ok){document.querySelector(".statusbar .sw").classList.toggle("on");
   toast(cur?"🔕 пуші вимкнено":"🔔 пуші увімкнено — писатиму сюди про кожне замовлення")}}
 function streak(m){if(DAYS!==1)return "";
@@ -697,7 +728,7 @@ async function refresh(){try{const r=await fetch("/api/stats?days="+DAYS),j=awai
    toast(`💰 <b>Замовлення №${c.id}</b> · ${grn(c.price_uah||0)} · ${(c.np_city_name||"").replace("м. ","")}`);
    unseen++;document.title="("+unseen+") "+document.title.split(") ").pop()}
   lastCid=j.last_confirmed.id}
- renderStatus(j);
+ renderStatus(j);loadLog();
  lastUpd=Date.now();const s=document.getElementById("botst");
  s.textContent=(j.settings&&j.settings.bot_enabled==="0")?"бот вимкнено":"онлайн · продає зараз";
  s.classList.toggle("off",j.settings&&j.settings.bot_enabled==="0")}
@@ -788,7 +819,7 @@ _DLG = r"""
 </div>
 <script>
 const CH=%%CHATS%%;
-let cur=null;
+let cur=null,ME=localStorage.getItem("cod_me")||"";
 const grn=n=>Math.round(n).toLocaleString("uk-UA").replace(/[\s,\u00A0]/g,"\u00A0")+"\u00A0₴";
 function ava(id,nm,cls){let s=0;const t=String(id);for(let i=0;i<t.length;i++)s+=t.charCodeAt(i);
  return `<span class="${cls||"ava"} g${s%7}">${(nm||"?")[0].toUpperCase()}</span>`}
@@ -847,10 +878,10 @@ async function send(){const i=document.getElementById("inp"),t=i.value.trim();if
   const M=document.getElementById("msgs");
   M.insertAdjacentHTML("beforeend",`<div class="m o"><span class="who">ви</span>${esc(t)}<span class="mt">${tm(ts)}</span></div>`);
   M.scrollTop=M.scrollHeight;i.value="";grow(i);
-  document.getElementById("cst").textContent="✓ надіслано клієнту · бот у цьому чаті на паузі";renderList()}
+  document.getElementById("cst").textContent="✓ надіслано · чат закріплено за вами, бот тут на паузі";renderList()}
  else document.getElementById("cst").textContent="⚠️ "+(j.error||"не вдалось надіслати")}
 async function giveBack(id){const j=await api("/api/close",{chat_id:id});
- if(j.ok){const c=CH.find(x=>x.id===id);c.mode="bot";
+ if(j.ok){const c=CH.find(x=>x.id===id);c.mode="bot";c.who=null;
   document.getElementById("cst").textContent="↩ чат повернуто боту";renderList()}}
 renderList();
 if(location.hash.indexOf("#u")===0)open_(parseInt(location.hash.slice(2)));
@@ -866,6 +897,11 @@ def render_dialogs(store: Store, out: Path, title: str, limit_chats: int = 40, l
                       MAX(m.ts_utc) AS last_ts, COUNT(m.id) AS n
                FROM chats c JOIN messages m ON m.chat_id = c.tg_user_id
                GROUP BY c.tg_user_id ORDER BY last_ts DESC LIMIT ?""", (limit_chats,)).fetchall():
+        ch = dict(ch)
+        try:
+            ch["assignee"] = store.c.execute("SELECT assignee FROM chats WHERE tg_user_id=?", (ch["tg_user_id"],)).fetchone()[0]
+        except Exception:  # noqa: BLE001
+            ch["assignee"] = None
         o = store.c.execute("SELECT id, set_code, stage FROM orders WHERE chat_id=? ORDER BY id DESC LIMIT 1",
                             (ch["tg_user_id"],)).fetchone()
         msgs = [{"r": "u" if m["role"] == "user" else "a", "t": _plain(m["content"])[:900], "ts": m["ts_utc"][:19]}
@@ -877,6 +913,7 @@ def render_dialogs(store: Store, out: Path, title: str, limit_chats: int = 40, l
             continue
         chats.append({"id": ch["tg_user_id"], "nm": ch["name"] or ch["first_name"] or "Без імені",
                       "un": ch["username"], "v": ch["variant"], "mode": ch["mode"],
+                      "who": ch.get("assignee"),
                       "last": (ch["last_ts"] or "")[:19], "n": ch["n"],
                       "order": ({"id": o["id"], "set": o["set_code"],
                                  "stage": _STAGE.get(o["stage"], ("", o["stage"]))[1]} if o else None),
