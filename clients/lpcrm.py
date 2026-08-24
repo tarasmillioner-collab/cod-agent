@@ -1,4 +1,4 @@
-"""LP-CRM API (tallside.lp-crm.biz). POST form-data на /api/<method>.html, поле key.
+"""LP-CRM API (<піддомен>.lp-crm.biz). POST form-data на /api/<method>.html, поле key.
 
 Подтверждено 2026-08-23 против реальной CRM: getStatuses, getOrdersIdByStatus,
 getOrdersByID (multi-id через запятую; возвращает ttn/ttn_status/status),

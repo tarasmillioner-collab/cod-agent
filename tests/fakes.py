@@ -128,7 +128,7 @@ class FakeBot:
 def make_cfg(**over) -> Config:
     base = dict(env="test", bot_token="t", admin_ids=(1,), managers_chat_id=-100, anthropic_api_key="k", claude_oauth_token="",
                 claude_model="fake", lpcrm_subdomain="x", lpcrm_api_key="y", lpcrm_api_key_in="z", lpcrm_dry_run=False,
-                lpcrm_site="olavita.skinactivelab.com", lpcrm_office="13", lpcrm_status_confirmed="11",
+                lpcrm_site="example.com", lpcrm_office="13", lpcrm_status_confirmed="11",
                 np_api_key="", db_path=":memory:", offer_path=str(ROOT / "offer.yaml"),
                 prompt_path=str(ROOT / "prompts/system.md"), blacklist_path=str(ROOT / "ua_blacklist.txt"),
                 llm_daily_usd_cap=15.0, voice_enabled=False, elevenlabs_api_key="", kie_api_key="", manager_name="Наталя",

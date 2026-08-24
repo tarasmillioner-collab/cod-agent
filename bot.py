@@ -58,8 +58,7 @@ def build_services(env_path: str = "config.env") -> Services:
     svc.objections = OBJ.load(offer)
     from core.personal_card import PersonalCards
     svc.pcards = PersonalCards(cfg.base_dir / "var" / "pcards", cfg.kie_api_key,
-                               ref_urls=["https://olavita.skinactivelab.com/lp/assets/packshot.jpg",
-                                         "https://olavita.skinactivelab.com/upsell/images/product-blue.png"],
+                               ref_urls=[u for u in (offer.raw.get("product") or {}).get("photo_urls", []) if u],
                                enabled=True)
     svc.voice = Voice(cfg.base_dir / "var" / "voice", kie_key=cfg.kie_api_key, eleven_key=cfg.elevenlabs_api_key,
                       enabled=cfg.voice_enabled)
